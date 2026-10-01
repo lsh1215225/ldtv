@@ -1,44 +1,40 @@
-name: Upstream Sync
-
-permissions:
-  contents: write
+name: Sync
 
 on:
   schedule:
-    - cron: "0 0 * * *" # every day
+    - cron: "15 16 1 * *"
   workflow_dispatch:
 
 jobs:
-  sync_latest_from_upstream:
-    name: Sync latest commits from upstream repo
+  sync:
     runs-on: ubuntu-latest
-    if: ${{ github.event.repository.fork }}
-
     steps:
-      - name: Checkout target repo
-        uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           ref: main
+          fetch-depth: 0
 
-      - name: Sync upstream changes
+      - name: Configure Git
         run: |
-          git config user.name "GH Action - Upstream Sync"
-          git config user.email "action@github.com"
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
 
-          git remote add upstream https://github.com/cmliu/edgetunnel.git
-          git fetch upstream main
+      - name: Backup Workflows
+        run: |
+          git stash push --include-untracked -- .github/workflows/
+          [ -d .github/workflows ] && rm -rf .github/workflows_backup && mv .github/workflows .github/workflows_backup
 
-          if git diff --quiet HEAD upstream/main; then
-            # 内容和上游一致，直接对齐，顺带清理历史分叉留下的多余 merge commit
-            git reset --hard upstream/main
-            git push --force-with-lease origin main
-          else
-            # 有本地修改，保持原来的合并方式，不覆盖任何人的改动
-            if ! git pull --no-rebase upstream main; then
-              echo "[Error] 合并上游变更产生冲突，自动同步已暂停，请手动 Sync Fork 并解决冲突。"
-              echo "[Error] Merge conflict detected while syncing upstream. Please sync your fork manually and resolve the conflicts."
-              exit 1
-            fi
-            git push origin main
-          fi
+      - name: Force Apply Upstream
+        run: |
+          git remote add upstream https://github.com/cmliu/edgetunnel || true
+          git fetch upstream main --force
+          git reset --hard upstream/main
+          git restore --source=stash@{0} -- .github/workflows/ 2>/dev/null || true
+          [ -d .github/workflows_backup ] && rm -rf .github/workflows && mv .github/workflows_backup .github/workflows
+
+      - name: Commit Changes
+        run: |
+          git add --all
+          git commit -am "🔄 $(TZ='Asia/Shanghai' date +'%m-%d %H:%M:%S') Force Sync" --allow-empty
+          git push origin main --force
